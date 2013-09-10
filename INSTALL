@@ -1,0 +1,7 @@
+Installation
+------------
+
+make
+make install
+
+Will install in /usr/local/bin

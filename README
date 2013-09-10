@@ -1,0 +1,32 @@
+Thunderbird Address Book Parser
+===============================
+
+Description
+-----------
+
+Mozilla Mork format reader.
+Generates the program 'mork'
+Mork will read an abook.mab file and report any problems it
+finds, dump its contents, and generate vCards.
+
+Usage:
+    mork [-v] [-V vCardFile.vcf] abood.mab
+
+
+Installation
+------------
+
+For installation or compiling instructions, see the INSTALL file.
+
+
+License
+-------
+
+Do whatever you want with it...
+
+How you can help
+----------------
+
+  Comments, patches, bug reports are welcome.
+
+
