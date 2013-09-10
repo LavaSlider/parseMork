@@ -10,7 +10,7 @@ Mork will read an abook.mab file and report any problems it
 finds, dump its contents, and generate vCards.
 
 Usage:
-    mork [-v] [-V vCardFile.vcf] abood.mab
+    mork [-v] [-V vCardFile.vcf] abook.mab
 
 
 Installation
