@@ -9,6 +9,9 @@
  *    Author: David W. Stockton
  *    September 9, 2013
  *
+ *    After getting this generally working based on the referenced code,
+ *    reverse engineering, etc., I found some documentation on the file
+ *    format at: https://developer.mozilla.org/en-US/docs/Mork_Structure
  ----------------------------------------------------------------------------*/
 #include <stdio.h>
 #include <stdlib.h>
@@ -425,6 +428,17 @@ void parseScopeId( const char *textId, int *id, int *scope ) {
 	*id = strtol( textId, (char **) NULL, 16 );
 	morkLog( "id %d\n", *id );
 }
+//
+// Groups should be processed as a block that can be ignored
+// or included. Since including ignored blocks in the file seems
+// silly we are ignoring groups themselves and just incorporating
+// all the elements found in groups, outside of groups, etc.
+//
+// The syntax is:
+//   @$${n{@		<-- to start the group (the 'n' is a group number)
+//   @$$}n}@		<-- to end an accepted or included group (the 'n'
+//			    matches the one given in the start.
+//   @$$}~abort~n}@	<-- to end and throw away the group content
 int parseMorkGroup( FILE *ifp ) {
 	return parseMorkMeta( ifp, '@' );
 }
