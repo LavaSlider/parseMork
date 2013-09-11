@@ -5,7 +5,8 @@
 #include "parseMork.h"
 
 void usage() {
-	fprintf( stderr, "mork [-v] [-V vCardFileName] abook.mab\n" );
+	fprintf( stderr, "usage: mork [-v] [-V vCardFileName] abook.mab\n" );
+	fprintf( stderr, " -g               : Do not parse groups\n" );
 	fprintf( stderr, " -v               : Verbose\n" );
 	fprintf( stderr, " -V vCardFileName : write vCards to the file\n" );
 }
@@ -24,6 +25,9 @@ int main( int argc, char **argv ) {
 		case '-':	// Options
 			++arg;
 			switch( *arg ) {
+			case 'g':	// Group parsing off
+				morkDoNotParseGroups = 1;
+				break;
 			case 'v':	// verbose
 				morkLogfp = stdout;
 				break;
