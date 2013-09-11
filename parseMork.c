@@ -4,7 +4,8 @@
  *    Developed after carful scrutiny of MorkParser.cpp written by
  *    Yuriy Soroka <ysoroka@scalingweb.com> and Annton Fedoruk
  *    <afedoruk@scalingweb.com> of ScalingWeb.com (that no longer seems
- *    to exist).
+ *    to exist). That was downloaded from:
+ *	   http://downloads.fyxm.net/Mork-Format-33313.html
  *
  *    Author: David W. Stockton
  *    September 9, 2013
@@ -25,7 +26,6 @@
 // entered then modified. Table 0 has the updated version, Table 1
 // has the pre-edited version.
 //
-
 typedef int	bool;
 #define	true	1
 #define	false	0
@@ -69,6 +69,18 @@ char *getMorkDictValue( morkDict *dict, int key );
 int getMorkDictKey( morkDict *dict, const char *value );
 void freeMorkDict( morkDict *dict );
 void freeMorkDictEntry( morkDictEntry *e );
+char *getValue( morkDb *mork, int objectId );
+char *getColumn( morkDb *morkDb, int objectId );
+int getColumnId( morkDb *morkDb, const char *value );
+
+// Read the characters through a function so that
+// I can add position counting in the input stream
+// and character buffering to use if groups are
+// properly implemented (need to go back and read
+// them again if not ~abort~'d).
+int morkgetc( FILE *ifp ) {
+	return fgetc( ifp );
+}
 
 void freeMorkDb( morkDb *mork ) {
 	freeMorkDict( mork->columns );
@@ -90,25 +102,25 @@ void freeMorkDb( morkDb *mork ) {
 }
 
 morkDb *parseMorkFile( const char *filename ) {
-	morkDb	*x;
+	morkDb	*mork;
 	FILE	*ifp = fopen( filename, "r" );
 	if( !ifp ) {
 		morkErr( "error: unable to read file \"%s\"\n", filename );
 		return 0;
 	}
-	x = parseMorkStream( ifp );
+	mork = parseMorkStream( ifp );
 	fclose( ifp );
 
 	// Print some info about what we loaded
 	//fprintf( morkLogfp, "\nDump of Mork Data\n" );
-	morkLog( "\nDump of Mork Data\n" );
-	morkLog( "----- columns table -----\n" );
-	if( morkLogfp ) dumpMorkDict( morkLogfp, x->columns );
-	morkLog( "----- values table -----\n" );
-	if( morkLogfp ) dumpMorkDict( morkLogfp, x->values );
-	morkLog( "----- mork structure -----\n" );
-	if( morkLogfp ) dumpTableScopeMap( morkLogfp, x );
-	return x;
+	//morkLog( "\nDump of Mork Data\n" );
+	//morkLog( "----- columns table -----\n" );
+	//if( morkLogfp ) dumpMorkDict( morkLogfp, x->columns );
+	//morkLog( "----- values table -----\n" );
+	//if( morkLogfp ) dumpMorkDict( morkLogfp, x->values );
+	//morkLog( "----- mork structure -----\n" );
+	//if( morkLogfp ) dumpTableScopeMap( morkLogfp, x );
+	return mork;
 }
 
 morkDb *parseMorkStream( FILE *ifp ) {
@@ -124,12 +136,11 @@ morkDb *parseMorkStream( FILE *ifp ) {
 	}
 	initializeTableScopeMap( mork );
 
-
 	// It should start with the MorkMagicHeader
 	char	magicHeaderBuffer[512];
 	int	bufferPos = 0;
 	do {
-		magicHeaderBuffer[bufferPos++] = fgetc( ifp );
+		magicHeaderBuffer[bufferPos++] = morkgetc( ifp );
 	} while( bufferPos < strlen( MorkMagicHeader ) && !feof( ifp ) );
 	magicHeaderBuffer[bufferPos] = '\0';
 	if( strcmp( magicHeaderBuffer, MorkMagicHeader ) != 0 ) {
@@ -141,7 +152,7 @@ morkDb *parseMorkStream( FILE *ifp ) {
 	}
 	morkLog( "Correct \"%s\" header found\n", magicHeaderBuffer );
 
-	cur = fgetc( ifp );
+	cur = morkgetc( ifp );
 	while( result && cur && !feof( ifp ) ) {
 		if( !isspace( cur ) ) {
 			switch( cur ) {
@@ -171,7 +182,7 @@ morkDb *parseMorkStream( FILE *ifp ) {
 				break;
 			}
 		}
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	return mork;
 }
@@ -183,7 +194,7 @@ int parseMorkDict( FILE *ifp, morkDb *m ) {
 	m->nowParsing = NPValues;
 
 	morkLog( "Entering parseMorkDict()\n" );
-	int cur = fgetc( ifp );
+	int cur = morkgetc( ifp );
 
 	while( result && cur != '>' && cur && !feof(ifp) ) {
 		if( !isspace( cur ) ) {
@@ -191,7 +202,7 @@ int parseMorkDict( FILE *ifp, morkDb *m ) {
 			case '<':
 				buf[0] = cur;
 				for( i = 1; i < strlen( MorkDictColumnMeta ); ++i ) {
-					cur = fgetc( ifp );
+					cur = morkgetc( ifp );
 					buf[i] = cur;
 				}
 				buf[i] = '\0';
@@ -214,7 +225,7 @@ int parseMorkDict( FILE *ifp, morkDb *m ) {
 				break;
 			}
 		}
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	morkLog( "-- Leaving parseMorkDict()\n" );
 	return result;
@@ -222,8 +233,8 @@ int parseMorkDict( FILE *ifp, morkDb *m ) {
 // A Mork Cell starts with '('
 int parseMorkCell( FILE *ifp, morkDb *m ) {
 	bool result = true;
-	bool bColumnOid = false;
-	bool bValueOid = false;
+	bool columnIsObjectId = false;
+	bool valueIsObjectId = false;
 	bool bColumn = true;
 	int corners = 0;
 
@@ -236,17 +247,17 @@ int parseMorkCell( FILE *ifp, morkDb *m ) {
 	int	textPos = 0;
 
 	// Process cell, start with column (bColumn == true)
-	char cur = fgetc( ifp );
+	char cur = morkgetc( ifp );
 	while( result && cur != ')' && cur && !feof(ifp) ) {
 		switch( cur ) {
 		case '^':	// Oids
 			if( bColumn ) {
 				corners++;
 				if( 1 == corners ) {
-					bColumnOid = true;
+					columnIsObjectId = true;
 				} else if( 2 == corners ) {
 					bColumn = false;
-					bValueOid = true;
+					valueIsObjectId = true;
 				}
 			} else {
 				text[textPos++] = cur;
@@ -261,16 +272,16 @@ int parseMorkCell( FILE *ifp, morkDb *m ) {
 			break;
 		case '\\': {	// Skip the newline if there is one
 				// otherwise it is an escaped character
-			char nextChar = fgetc( ifp );
+			char nextChar = morkgetc( ifp );
 			if( '\r' != nextChar && '\n' != nextChar ) {
 				text[textPos++] = nextChar;
-			} //else fgetc( ifp );
+			} //else morkgetc( ifp );
 			}
 			break;
 		case '$': {	// Hex escape, get next two chars
 			char	hexChar[3];
-			hexChar[0] = fgetc( ifp );
-			hexChar[1] = fgetc( ifp );
+			hexChar[0] = morkgetc( ifp );
+			hexChar[1] = morkgetc( ifp );
 			hexChar[2] = '\0';
 			text[textPos++] = (char) strtol( hexChar, (char **) NULL, 16 );
 			}
@@ -284,29 +295,21 @@ int parseMorkCell( FILE *ifp, morkDb *m ) {
 			}
 			break;
 		}
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	column[colPos] = '\0';
 	text[textPos] = '\0';
-	morkLog( " => %s%s%s%s\n", bColumnOid ? "^" : "", column, bValueOid ? "^" : "=", text );
+	morkLog( " => %s%s%s%s\n", columnIsObjectId ? "^" : "", column, valueIsObjectId ? "^" : "=", text );
 
 	// Apply column and text
 	int columnId = strtol( column, (char **) NULL, 16 );
 
 	// If the text field is not empty
 	if( '\0' != text[0] ) {
-		if( NPRows != m->nowParsing ) {
-			// Dicts
-			if( NPColumns == m->nowParsing ) {
-				storeInMorkDict( m, m->columns, columnId, text);
-			} else {
-				storeInMorkDict( m, m->values, columnId, text );
-			}
-		} else {
+		if( NPRows == m->nowParsing ) {
 			// Rows
-			int valueId = strtol( text, (char **) NULL, 16 );
-
-			if( bValueOid  ) {
+			if( valueIsObjectId  ) {
+				int valueId = strtol( text, (char **) NULL, 16 );
 				storeInMorkCell( m->activeCells, columnId,
 						valueId );
 			} else {
@@ -316,7 +319,48 @@ int parseMorkCell( FILE *ifp, morkDb *m ) {
 				storeInMorkCell( m->activeCells,
 					columnId, m->nextAddValueId );
 			}
+		} else {
+			// Dicts
+			if( NPColumns == m->nowParsing ) {
+				storeInMorkDict( m, m->columns, columnId, text);
+			} else {
+				storeInMorkDict( m, m->values, columnId, text );
+			}
 		}
+	//} else {
+	//	// If the text is empty I should probably be removing
+	//	// any previously set cell for the column...
+	//	// If nothing previously set, then just doing nothing
+	//	// is fine.
+	//	if( NPRows == m->nowParsing ) {
+	//		// Rows
+	//		int i;
+	//		for( i = 0; i < m->activeCells->cnt; ++i ) {
+	//			if( columnId <= m->activeCells->entries[i]->key ) {
+	//				break;
+	//			}
+	//		}
+	//		if( i < m->activeCells->cnt &&
+	//		    m->activeCells->entries[i]->key == columnId ) {
+	//			morkErr( "Changing %X from %X to empty\n",
+	//				columnId, m->activeCells->entries[i]->value );
+	//			morkLog( "Changing %X from %X to empty\n",
+	//				columnId, m->activeCells->entries[i]->value );
+	//		}
+	//	} else {
+	//		// Dicts
+	//		if( NPColumns == m->nowParsing ) {
+	//			morkErr( "Empty value for column dictionary entry %X? Was \"%s\"?\n",
+	//				columnId, getColumn( m, columnId ) );
+	//			morkLog( "Empty value for column dictionary entry %X? Was \"%s\"?\n",
+	//				columnId, getColumn( m, columnId ) );
+	//		} else {
+	//			morkErr( "Empty value for values dictionary entry %X? Was \"%s\"?\n",
+	//				columnId, getValue( m, columnId ) );
+	//			morkLog( "Empty value for values dictionary entry %X? Was \"%s\"?\n",
+	//				columnId, getValue( m, columnId ) );
+	//		}
+	//	}
 	}
 	return result;
 }
@@ -324,12 +368,12 @@ int parseMorkComment( FILE *ifp ) {
 	morkLog( "  Entering parseMorkComment()" );
 	char	cmntBuf[512];
 	int	cmntPos = 0;
-	int cur = fgetc( ifp );
+	int cur = morkgetc( ifp );
 	if( '/' != cur ) return false;
 
 	while( cur && cur != '\r' && cur != '\n' ) {
 		cmntBuf[cmntPos++] = cur;
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	cmntBuf[cmntPos] = '\0';
 	morkLog( " => \"%s\"\n", cmntBuf );
@@ -344,14 +388,14 @@ int parseMorkTable( FILE *ifp, morkDb *m ) {
 
 	morkLog( "Entering parseMorkTable()\n" );
 
-	char cur = fgetc( ifp );
+	char cur = morkgetc( ifp );
 
 	// Get id
 	while( cur && cur != '{' && cur != '[' && cur != '}' ) {
 		if( !isspace( cur ) ) {
 			textId[textPos++] = cur;
 		}
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	textId[textPos] = '\0';
 
@@ -375,7 +419,7 @@ int parseMorkTable( FILE *ifp, morkDb *m ) {
 				int	justPos = 0;
 				while( cur && !isspace( cur ) ) {
 					justId[justPos++] = cur;
-					cur = fgetc( ifp );
+					cur = morkgetc( ifp );
 
 					if( cur == '}' ) {
 						morkLog( "-- Leaving parseMorkTable()\n" );
@@ -392,7 +436,7 @@ int parseMorkTable( FILE *ifp, morkDb *m ) {
 				break;
 			}
 		}
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	morkLog( "-- Leaving parseMorkTable()\n" );
 	return result;
@@ -443,11 +487,11 @@ int parseMorkGroup( FILE *ifp ) {
 	return parseMorkMeta( ifp, '@' );
 }
 int parseMorkMeta( FILE *ifp, char c ) {
-	int cur = fgetc( ifp );
+	int cur = morkgetc( ifp );
 	morkLog( "    - Ignoring meta \"" );
 	while( cur != c && cur && !feof(ifp) ) {
 		if( morkLogfp ) fputc( cur, morkLogfp );
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	if( morkLogfp ) fputs( "\"\n", morkLogfp );
 	return true;
@@ -461,14 +505,14 @@ int parseMorkRow( FILE *ifp, morkDb *m, int tableId, int tableScope ) {
 	morkLog( "  Entering parseMorkRow()\n" );
 	m->nowParsing = NPRows;
 
-	int cur = fgetc( ifp );
+	int cur = morkgetc( ifp );
 
 	// Get the id text description
 	while( cur != '(' && cur != '[' && cur != ']' && cur && !feof(ifp) ) {
 		if( !isspace( cur ) ) {
 			rowIdText[textPos++] = cur;
 		}
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	rowIdText[textPos] = '\0';
 
@@ -501,16 +545,16 @@ int parseMorkRow( FILE *ifp, morkDb *m, int tableId, int tableScope ) {
 				break;
 			}
 		}
-		cur = fgetc( ifp );
+		cur = morkgetc( ifp );
 	}
 	return result;
 }
 
-char *getValue( morkDb *mork, int oid ) {
-	return getMorkDictValue( mork->values, oid );
+char *getValue( morkDb *mork, int objectId ) {
+	return getMorkDictValue( mork->values, objectId );
 }
-char *getColumn( morkDb *morkDb, int oid ) {
-	return getMorkDictValue( morkDb->columns, oid );
+char *getColumn( morkDb *morkDb, int objectId ) {
+	return getMorkDictValue( morkDb->columns, objectId );
 }
 int getColumnId( morkDb *morkDb, const char *value ) {
 	return getMorkDictKey( morkDb->columns, value );
