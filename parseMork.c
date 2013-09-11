@@ -30,6 +30,8 @@ typedef int	bool;
 #define	true	1
 #define	false	0
 
+#define	PARSE_GROUPS	1
+
 const char MorkMagicHeader[] = "// <!-- <mdb:mork:z v=\"1.4\"/> -->";
 const char MorkDictColumnMeta[] = "<(a=c)>";
 
@@ -80,6 +82,9 @@ int getColumnId( morkDb *morkDb, const char *value );
 // them again if not ~abort~'d).
 int morkgetc( FILE *ifp ) {
 	return fgetc( ifp );
+}
+int morkungetc( int c, FILE *ifp ) {
+	return ungetc( c, ifp );
 }
 
 void freeMorkDb( morkDb *mork ) {
@@ -484,7 +489,167 @@ void parseScopeId( const char *textId, int *id, int *scope ) {
 //			    matches the one given in the start.
 //   @$$}~abort~n}@	<-- to end and throw away the group content
 int parseMorkGroup( FILE *ifp ) {
+#if	PARSE_GROUPS
+	static	const char *startString = "$${.{";
+	static	const char *endString = "$$}.}";
+	static	const char *abortString = "$$}~abort~.}";
+	char	headerBuf[64];
+	int	headerBufPos = 0;
+	char	*contentBuf = (char *) 0;
+	int	contentBufSize = 0;
+	int	contentBufPos = 0;
+	char	footerBuf[64];
+	int	footerBufPos = 0;
+	int	cur;
+	int	startGroupId = 0;
+	int	endGroupId = -1;
+	bool	isCorrupt;
+	bool	groupAborted = false;
+
+	morkLog( "Entering parseMorkGroup()\n" );
+
+	// Load the group header
+	morkLog( "  . Loading the group header: @" );
+	cur = morkgetc( ifp );
+	while( cur != '@' && cur && !feof(ifp) ) {
+		if( headerBufPos < 63 )
+			headerBuf[headerBufPos++] = cur;
+		cur = morkgetc( ifp );
+	}
+	headerBuf[headerBufPos] = '\0';
+	morkLog( "%s", headerBuf );
+	if( headerBufPos > 4 && headerBuf[headerBufPos-1] == '{' &&
+	    strncmp( headerBuf, startString, 3 ) == 0 &&
+	    isxdigit( headerBuf[3] ) ) {
+		startGroupId = strtol( &headerBuf[3], (char **) NULL, 16 );
+		endGroupId = -startGroupId - 1;
+		morkLog( "@\n    + Got the group header with group id of %d\n",
+			startGroupId );
+	} else {
+		morkLog( "@\n    - Failed to recognize a group header\n" );
+		// If it was not a valid header, then we should not be
+		// considered as being in a group. If I just return
+		// it will be the same as skipping it like a meta sequence!
+		return true;	// Not really true but...
+	}
+
+	// Load the group contents
+	bool notAtTheEnd = true;
+	cur = morkgetc( ifp );
+	while( notAtTheEnd && cur && !feof(ifp) ) {
+		// Make sure there is buffer space for another character
+		if( contentBufPos >= contentBufSize ) {
+			contentBufSize += 512;
+			contentBuf = realloc( contentBuf,
+				contentBufSize * sizeof(*contentBuf) );
+		}
+		switch( cur ) {
+		case '\\':	// Just blindly load the next character...
+			contentBuf[contentBufPos++] = cur;
+			contentBuf[contentBufPos++] = morkgetc( ifp );
+			break;
+		case '@':	// Could be the end...
+			contentBuf[contentBufPos++] = cur;
+			cur = morkgetc( ifp );
+			contentBuf[contentBufPos++] = cur;
+			if( cur == '$' ) {
+				cur = morkgetc( ifp );
+				contentBuf[contentBufPos++] = cur;
+				if( cur == '$' ) {
+					// I believe it is the end!
+					contentBufPos -= 3; // Remove "@$$"
+					if( morkungetc( '$', ifp ) == EOF )
+						morkErr( "Failed to unget "
+							 "the first '$'\n" );
+					if( morkungetc( '$', ifp ) == EOF )
+						morkErr( "Failed to unget "
+							 "the second '$'\n" );
+					if( morkungetc( ' ', ifp ) == EOF )
+						morkErr( "Failed to unget "
+							 "the staring '@'\n" );
+					notAtTheEnd = false;
+				}
+			}
+			break;
+		default:
+			contentBuf[contentBufPos++] = cur;
+			break;
+		}
+		cur = morkgetc( ifp );
+	}
+	contentBuf[contentBufPos] = '\0';
+	morkLog( "  . Loaded group contents:\n%s\n", contentBuf );
+
+	// I could look for a group header here and recurse if nested
+	// groups are allowed...
+
+	// Load the group footer
+	morkLog( "  . Loading the group footer: @" );
+	isCorrupt = false;
+	cur = morkgetc( ifp );
+	while( cur != '@' && cur && !feof(ifp) ) {
+		if( footerBufPos < 63 )
+			footerBuf[footerBufPos++] = cur;
+		cur = morkgetc( ifp );
+	}
+	footerBuf[footerBufPos] = '\0';
+	morkLog( "%s", footerBuf );
+	if( footerBufPos > 4 && footerBuf[footerBufPos-1] == '}' &&
+	    strncmp( footerBuf, endString, 3 ) == 0 &&
+	    isxdigit( footerBuf[3] ) ) {
+		endGroupId = strtol( &footerBuf[3], (char **) NULL, 16 );
+		morkLog( "@\n    + Got the group footer with group id of %d\n",
+			endGroupId );
+	} else if( footerBufPos > 10 && footerBuf[footerBufPos-1] == '}' &&
+	    strncmp( footerBuf, abortString, 10 ) == 0 &&
+	    isxdigit( footerBuf[10] ) ) {
+		// This a strict abort match but really anything that
+		// puts the group index anyplace other than at character
+		// position 3 will result in an abort!
+		groupAborted = true;
+		endGroupId = strtol( &footerBuf[10], (char **) NULL, 16 );
+		morkLog( "@\n    + Got the abort group footer with group id of %d\n",
+			endGroupId );
+	} else {
+		isCorrupt = true;
+		morkLog( "@\n    - Failed to recognize a group footer\n" );
+	}
+
+	// If the group was not aborted then push the content back on the
+	// input to be read by the normal processing
+	if( isCorrupt ) {
+		morkErr( "Something was corrupt in the group footer?\n" );
+		morkLog( "  . Something was wrong... trashing contents\n" );
+	} else if( startGroupId != endGroupId ) {
+		morkErr( "Something's corrupt because the start group ID "
+			 "is %d and the end group ID is %d\n",
+			 startGroupId, endGroupId );
+		morkLog( "  . Start  and end Id's don't match... "
+			 "trashing the contents\n" );
+	} else if( !groupAborted ) {
+		morkLog( "  . Found a good unaborted group... "
+			 "pushing contents to be loaded\n" );
+		while( --contentBufPos >= 0 ) {
+			if( morkungetc( contentBuf[contentBufPos], ifp ) == EOF ) {
+				morkErr( "***** error: failed ungetting "
+					 "group %d content!\n", startGroupId );
+				// Try and fail gracefully...
+				//   I should try and read in all the
+				//   ungotton characters so it will be just
+				//   like an aborted group!
+				contentBufPos = 0;
+			}
+		}
+	} else {
+		morkLog( "  . Found a good group but it was aborted... "
+			 "trashing contents\n" );
+	}
+	// Free that allocated memory...
+	if( contentBuf )	free( contentBuf );
+	return true;
+#else
 	return parseMorkMeta( ifp, '@' );
+#endif
 }
 int parseMorkMeta( FILE *ifp, char c ) {
 	int cur = morkgetc( ifp );
