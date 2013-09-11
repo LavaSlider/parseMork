@@ -30,13 +30,14 @@ typedef int	bool;
 #define	true	1
 #define	false	0
 
-#define	PARSE_GROUPS	1
-
-const char MorkMagicHeader[] = "// <!-- <mdb:mork:z v=\"1.4\"/> -->";
-const char MorkDictColumnMeta[] = "<(a=c)>";
+// Set this to true to just ignore start and end group labels
+int morkDoNotParseGroups = false;
 
 FILE	*morkLogfp = NULL;
 FILE	*morkErrfp = NULL;
+
+const char MorkMagicHeader[] = "// <!-- <mdb:mork:z v=\"1.4\"/> -->";
+const char MorkDictColumnMeta[] = "<(a=c)>";
 
 #define	morkLog(...)	if( morkLogfp ) fprintf( morkLogfp, ##__VA_ARGS__ )
 #define	morkErr(...)	if( morkErrfp ) fprintf( morkErrfp, ##__VA_ARGS__ )
@@ -489,7 +490,9 @@ void parseScopeId( const char *textId, int *id, int *scope ) {
 //			    matches the one given in the start.
 //   @$$}~abort~n}@	<-- to end and throw away the group content
 int parseMorkGroup( FILE *ifp ) {
-#if	PARSE_GROUPS
+	if( morkDoNotParseGroups ) {
+		return parseMorkMeta( ifp, '@' );
+	}
 	static	const char *startString = "$${.{";
 	static	const char *endString = "$$}.}";
 	static	const char *abortString = "$$}~abort~.}";
@@ -647,9 +650,6 @@ int parseMorkGroup( FILE *ifp ) {
 	// Free that allocated memory...
 	if( contentBuf )	free( contentBuf );
 	return true;
-#else
-	return parseMorkMeta( ifp, '@' );
-#endif
 }
 int parseMorkMeta( FILE *ifp, char c ) {
 	int cur = morkgetc( ifp );

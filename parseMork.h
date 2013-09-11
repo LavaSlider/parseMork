@@ -33,6 +33,9 @@
 #ifndef __ParseMork_h__
 #define __ParseMork_h__
 
+// Set this to true to just ignore start and end group labels
+extern int morkDoNotParseGroups;
+
 // Set these to NULL or where you want logging and debug output to print
 extern FILE	*morkLogfp;
 extern FILE	*morkErrfp;
